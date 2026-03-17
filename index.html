@@ -105,7 +105,7 @@
     0%,100%{ filter: drop-shadow(0 0 6px rgba(0,102,255,0.5)); }
     50%{ filter: drop-shadow(0 0 18px rgba(0,102,255,0.9)); }
   }
-  .lock-icon svg { animation: pulse-lock 2.5s ease-in-out infinite; }
+  .lock-icon svg { animation: pulse-lock 2.5s ease-in-out infinite; }SB_CONFIG 
 
   /* Tabs */
   .tabs { display: flex; background: var(--tab-bg); border-radius: 12px; padding: 4px; margin-bottom: 22px; border: 1px solid var(--border); }
@@ -172,6 +172,7 @@
   /* iframe 全屏 */
   #content-frame { position: fixed; inset: 0; width: 100%; height: 100%; border: none; display: none; z-index: 100; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 <div class="container" id="lock-ui">
@@ -270,8 +271,13 @@
 
 <script>
 // ═══════════════════════════════════════════
-// CONFIG — 填入你的資料
+// Supabase 設定（填入你的 Project URL 和 Anon Key）
 // ═══════════════════════════════════════════
+const SB_CONFIG = {
+  url: "https://hgannxpvhxfksriasvrm.supabase.co",       // 例：https://abcxyz.supabase.co
+  anonKey: "sb_publishable_AVqRLvtkhhXEBmBv7bnumg_4iTd_aLs"
+};
+
 const CONFIG = {
   FB_PAGE_1_URL:  "https://www.facebook.com/profile.php?id=61574080730914",
   FB_PAGE_1_NAME: "櫻星 凜 Sakurasei Rin",
@@ -422,7 +428,42 @@ async function doUnlock(){
     const decrypted=await crypto.subtle.decrypt({name:'AES-GCM',iv:nonce},key,ct);
     window._unlockedHTML = new TextDecoder().decode(decrypted);
 
-    window._unlockedHTML = new TextDecoder().decode(decrypted);
+    // ── 寫入 Supabase 追蹤記錄 ──
+    (async () => {
+      try {
+        if(SB_CONFIG.url === "YOUR_SUPABASE_URL") return; // 尚未設定
+        const sbClient = supabase.createClient(SB_CONFIG.url, SB_CONFIG.anonKey);
+        const _now = new Date().toISOString();
+        const _device = navigator.userAgent.split(' ').slice(-3).join(' ');
+
+        // 1. 寫入解鎖記錄
+        await sbClient.from('unlock_logs').insert({
+          email: email.toLowerCase().trim(),
+          unlocked_at: _now,
+          device: _device
+        });
+
+        // 2. 更新授權名單的 use_count + last_use
+        const {data: u} = await sbClient.from('authorized_users').select('use_count').eq('email', email.toLowerCase().trim()).single();
+        if(u) {
+          await sbClient.from('authorized_users').update({
+            use_count: (u.use_count || 0) + 1,
+            last_use: _now
+          }).eq('email', email.toLowerCase().trim());
+        }
+      } catch(e){ /* 靜默失敗，不影響解鎖 */ }
+    })();
+
+    // ── Formspree 通知（備用）──
+    fetch(`https://formspree.io/f/${CONFIG.FORMSPREE_ID}`, {
+      method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body: JSON.stringify({
+        _subject: `📊 解鎖記錄：${email}（第 ${_usage.count} 次）`,
+        email,
+        message: `使用者解鎖通知\n\nEmail: ${email}\n累計第 ${_usage.count} 次使用\n首次: ${_usage.first}\n本次: ${_now}\n裝置: ${navigator.userAgent.split(' ').slice(-2).join(' ')}`
+      })
+    }).catch(()=>{});
+
     document.getElementById('lock-ui').style.display='none';
     document.body.style.overflow='visible';
     const frame = document.getElementById('content-frame');
